@@ -1,6 +1,10 @@
 import argparse
-import json
+import difflib
 import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any, Dict
 
 import requests
@@ -8,6 +12,9 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.prompt import Confirm  # Add this import
+from rich.syntax import Syntax
+
+from .agent import Agent
 
 console = Console()
 
@@ -48,198 +55,283 @@ def get_file_content(file_path: str) -> str:
         return f"Error reading {file_path}: {str(e)}"
 
 
-def info(args=None):  # Accept an optional argument
+def info(args=None):
     # Collect all file contents
-    files_content = []
+    current_files = {}
     for root, dirs, files in os.walk("."):
         for file in files:
             if file.endswith(
                 (".py", ".js", ".ts", ".java", ".cpp", ".h", ".cs", ".go")
             ):
                 path = os.path.join(root, file)
-                content = get_file_content(path)
-                files_content.append(f"File: {path}\n\n{content}\n")
+                try:
+                    current_files[path] = get_file_content(path)
+                except Exception as e:
+                    print(f"Warning: Could not read {path}: {e}")
 
-    if not files_content:
+    if not current_files:
         print("No code files found in the current directory.")
         return
 
-    # Prepare prompt for Claude
-    prompt = """Please analyze these code files and provide a concise summary of:
-1. The main purpose of the application
-2. Key features and functionality
-3. Main components and their roles
-
-Here are the files:
-
-{}""".format(
-        "\n---\n".join(files_content)
-    )
-
     try:
-        claude = ClaudeAPI()
-        response = claude.send_message(prompt)
+        agent = Agent()
+        response = agent.get_app_analysis(current_files, args.prompt if args else None)
 
-        if "content" in response and len(response["content"]) > 0:
+        if response:
             print("\nProject Analysis:")
-            markdown = Markdown(response["content"][0]["text"])
+            markdown = Markdown(response)
             console.print(markdown)
         else:
             print("Error: No content in response")
-            print("Raw response:", json.dumps(response, indent=2))
+
     except Exception as e:
         print(f"Error getting analysis: {str(e)}")
 
 
-def apply_changes(content: str):
-    """Apply the changes to the current directory"""
-    import subprocess
-    import tempfile
-
-    # Clean up the patch content
-    lines = content.strip().split("\n")
-    cleaned_lines = []
-    for line in lines:
-        if line.startswith(("---", "+++")) and not line.startswith(
-            ("--- ./", "+++ ./")
-        ):
-            # Add ./ to relative paths if missing
-            parts = line.split(" ")
-            if len(parts) > 1:
-                cleaned_lines.append(f"{parts[0]} ./{parts[1]}")
-            continue
-        cleaned_lines.append(line)
-
-    cleaned_content = "\n".join(cleaned_lines)
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as tmp:
-        tmp.write(cleaned_content)
-        tmp.flush()
-        tmp_path = tmp.name
-
+def generate_diff(original_path: str, new_path: str) -> str:
+    """Generate a unified diff between two files with syntax highlighting"""
     try:
-        # First try with -p0
-        result = subprocess.run(
-            ["patch", "-p0", "--forward", "--verbose"],
-            stdin=open(tmp_path, "r"),
-            cwd=os.getcwd(),
-            capture_output=True,
-            text=True,
-            check=False,
+        with open(original_path, "r") as f:
+            original_lines = f.readlines()
+    except FileNotFoundError:
+        original_lines = []
+
+    with open(new_path, "r") as f:
+        new_lines = f.readlines()
+
+    diff_lines = list(
+        difflib.unified_diff(
+            original_lines, new_lines, fromfile=original_path, tofile=new_path
         )
+    )
 
-        if result.returncode != 0:
-            # If p0 fails, try with -p1
-            result = subprocess.run(
-                ["patch", "-p1", "--forward", "--verbose"],
-                stdin=open(tmp_path, "r"),
-                cwd=os.getcwd(),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+    if not diff_lines:
+        return "No changes"
 
-        # Print debug information
-        print("\nPatch attempt output:")
-        if result.stdout:
-            print("stdout:", result.stdout)
-        if result.stderr:
-            print("stderr:", result.stderr)
+    # Determine language for syntax highlighting
+    diff_text = "".join(diff_lines)
 
-        os.unlink(tmp_path)
-        return result.returncode == 0
+    # Create syntax highlighted diff
+    syntax = Syntax(diff_text, "diff", theme="monokai")
+    return syntax
 
+
+def has_actual_changes(file_path: str, temp_file: str) -> bool:
+    """Check if there are actual changes between files"""
+    if not os.path.exists(file_path):
+        return True  # New file counts as a change
+
+    with open(file_path, "r") as f:
+        original = f.read()
+    with open(temp_file, "r") as f:
+        new = f.read()
+    return original != new
+
+
+def _write_temp_files(file_changes: dict, temp_dir: str) -> dict:
+    """Write changes to temporary files and return mapping of paths to temp files."""
+    temp_files = {}
+    for file_path, content in file_changes.items():
+        if not file_path or not content:
+            continue
+
+        abs_path = os.path.abspath(file_path)
+        temp_file = os.path.join(temp_dir, os.path.basename(file_path))
+        os.makedirs(os.path.dirname(temp_file), exist_ok=True)
+
+        with open(temp_file, "w", encoding="utf-8") as f:
+            f.write(content)
+        temp_files[abs_path] = temp_file
+
+    return temp_files
+
+
+def _check_for_changes(temp_files: dict) -> bool:
+    """Check if any files have actual changes."""
+    for file_path, temp_file in temp_files.items():
+        if has_actual_changes(file_path, temp_file):
+            return True
+    return False
+
+
+def _display_changes(temp_files: dict) -> None:
+    """Display all file changes with syntax highlighting."""
+    for file_path, temp_file in temp_files.items():
+        if has_actual_changes(file_path, temp_file):
+            print(f"\nDiff for {file_path}:")
+            if os.path.exists(file_path):
+                diff = generate_diff(file_path, temp_file)
+                console.print(diff)
+            else:
+                print("(New file)")
+                with open(temp_file, "r") as f:
+                    ext = os.path.splitext(file_path)[1].lstrip(".") or "text"
+                    syntax = Syntax(f.read(), ext, theme="monokai")
+                    console.print(syntax)
+
+
+def _apply_confirmed_changes(temp_files: dict) -> bool:
+    """Apply changes after confirmation."""
+    try:
+        for file_path, temp_file in temp_files.items():
+            if has_actual_changes(file_path, temp_file):
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                shutil.copy2(temp_file, file_path)
+        return True
     except Exception as e:
         print(f"Failed to apply changes: {str(e)}")
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
         return False
 
 
-def change(text: str):  # Renamed from changes to change
-    files_content = []
-    for root, dirs, files in os.walk("."):
-        for file in files:
-            if file.endswith(
-                (".py", ".js", ".ts", ".java", ".cpp", ".h", ".cs", ".go")
-            ):
-                path = os.path.join(root, file)
-                content = get_file_content(path)
-                files_content.append(f"File: {path}\n\n{content}\n")
+def apply_changes(file_changes: dict) -> bool:
+    """Apply the changes to the files with diff preview."""
+    if not file_changes:
+        print("No changes to apply")
+        return False
 
-    if not files_content:
-        print("No code files found in the current directory.")
-        return
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_files = _write_temp_files(file_changes, temp_dir)
 
-    prompt = """I need help modifying some code files. Here are the current files:
+        if not temp_files:
+            print("No valid files to modify")
+            return False
 
-{}
+        print("\nAnalyzing changes...")
+        if not _check_for_changes(temp_files):
+            print("No changes detected in any files")
+            return False
 
-The requested changes are:
-{}
+        print("\nProposed changes:")
+        _display_changes(temp_files)
 
-Format your response as a unified diff file with these requirements:
-1. Start each file diff with "--- filename" and "+++ filename"
-2. Use relative paths from the current directory
-3. Include @@ line numbers @@
-4. Only output the diff content, no other text
+        if Confirm.ask("\nDo you want to apply these changes?"):
+            return _apply_confirmed_changes(temp_files)
 
-Example format:
---- ./path/to/file.py
-+++ ./path/to/file.py
-@@ -1,3 +1,3 @@
- line
--old line
-+new line
- line
-""".format(
-        "\n---\n".join(files_content), text
-    )
+        return False
+
+
+def _read_single_file(file_path: Path, base_path: Path) -> tuple[str, str]:
+    """Read a single file and return its path and content."""
+    if not file_path.is_absolute():
+        file_path = base_path / file_path
 
     try:
-        claude = ClaudeAPI()
-        response = claude.send_message(prompt)
-
-        if "content" in response and len(response["content"]) > 0:
-            changes_content = response["content"][0]["text"]
-            print("\nSuggested Changes:")
-            console.print(changes_content)
-
-            if Confirm.ask("\nDo you want to apply these changes?"):
-                if apply_changes(changes_content):
-                    print("Changes applied successfully!")
-                else:
-                    print(
-                        "Failed to apply changes. You may need to apply them manually."
-                    )
-        else:
-            print("Error: No content in response")
-            print("Raw response:", json.dumps(response, indent=2))
+        return str(file_path.resolve()), file_path.read_text()
     except Exception as e:
-        print(f"Error getting changes: {str(e)}")
+        print(f"Warning: Could not read {file_path}: {e}")
+        return None, None
+
+
+def _read_specified_files(file_list: list[str], base_path: Path) -> Dict[str, str]:
+    """Read content of specified files."""
+    files = {}
+    for filepath in file_list:
+        path, content = _read_single_file(Path(filepath), base_path)
+        if path and content:
+            files[path] = content
+        else:
+            print(f"Warning: File not found: {filepath}")
+    return files
+
+
+def _scan_directory(path: Path) -> Dict[str, str]:
+    """Scan directory for code files."""
+    files = {}
+    code_extensions = [".py", ".js", ".ts", ".java", ".cpp", ".h", ".cs", ".go"]
+
+    for filepath in path.rglob("*"):
+        if filepath.is_file() and filepath.suffix in code_extensions:
+            path, content = _read_single_file(filepath, path)
+            if path and content:
+                files[path] = content
+
+    return files
+
+
+def process_change_command(args):
+    """Process the change command"""
+    if not args.prompt:
+        print("Error: Change prompt is required")
+        return 1
+
+    path = Path(args.path).resolve() if args.path else Path.cwd()
+    if not path.exists():
+        print(f"Error: Path {path} does not exist")
+        return 1
+
+    try:
+        # Read files based on command arguments
+        current_files = (
+            _read_specified_files(args.files.split(), path)
+            if args.files
+            else _scan_directory(path)
+        )
+
+        if not current_files:
+            print("No valid files to process")
+            return 1
+
+        # Get and apply modifications
+        agent = Agent()
+        result = agent.get_app_changes(args.prompt, current_files)
+
+        if not result or "files" not in result:
+            print("Error: Invalid response from AI")
+            return 1
+
+        if apply_changes(result["files"]):
+            print("\nChanges applied successfully!")
+            if result.get("messageSize"):
+                print(f"\n{result['messageSize']}")
+        else:
+            print("\nNo changes were applied.")
+
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return 1
+
+    return 0
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CodeDriver CLI")
-    subparsers = parser.add_subparsers(dest="command")
+    """Main entry point"""
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        print("Error: ANTHROPIC_API_KEY environment variable is required")
+        print("Please set it with: export ANTHROPIC_API_KEY=your_api_key")
+        return 1
 
-    parser_info = subparsers.add_parser("info", help="Display info")
-    parser_info.set_defaults(func=info)
+    parser = argparse.ArgumentParser(
+        description="CodeDriver - AI-powered code modification tool"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    parser_change = subparsers.add_parser(
-        "change", help="Get suggested code changes"
-    )  # Updated command name
-    parser_change.add_argument("text", help="Description of the changes needed")
-    parser_change.set_defaults(
-        func=lambda args: change(args.text)
-    )  # Updated function reference
+    # Info command
+    info_parser = subparsers.add_parser(
+        "info", help="Analyze code in current directory"
+    )
+    info_parser.add_argument(
+        "prompt", nargs="?", help="Optional question about the code"
+    )
+
+    # Change command
+    change_parser = subparsers.add_parser("change", help="Change code based on prompt")
+    change_parser.add_argument("prompt", help="Change description")
+    change_parser.add_argument("--path", help="Path to project directory")
+    change_parser.add_argument(
+        "--files",
+        help="Space-separated list of files to process (e.g., 'file1.py file2.js')",
+    )
 
     args = parser.parse_args()
-    if args.command:
-        args.func(args)
+
+    if args.command == "info":
+        return info(args)
+    elif args.command == "change":
+        return process_change_command(args)
     else:
         parser.print_help()
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

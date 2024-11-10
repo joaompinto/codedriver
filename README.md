@@ -1,26 +1,67 @@
 # CodeDriver
 
-CodeDriver is a command-line tool that leverages the Claude AI assistant to analyze and modify code files in your project.
+CodeDriver is an AI-powered tool that helps you modify and analyze code files using natural language prompts. It leverages the Anthropic Claude AI model to understand your requests and generate the necessary code changes or provide insightful analysis.
 
-## Key Features
+## Features
 
-1. **Project Analysis**: Provide a concise summary of the project's purpose, key features, and main components by analyzing the codebase.
+- **Code Modification**: Provide a natural language description of the changes you need, and CodeDriver will generate a unified diff with the proposed modifications.
+- **Code Analysis**: Get a concise analysis of your codebase, including its main purpose, key features, and main components.
+- **Interactive Preview**: Before applying any changes, you can preview the proposed modifications and decide whether to apply them or not.
+- **Syntax Highlighting**: Diffs and new files are displayed with syntax highlighting for better readability.
 
-2. **Code Modifications**: Generate suggested code changes based on your requirements in the form of a unified diff. Review and apply the changes directly from the CLI.
+## Installation
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/your-username/codedriver.git
+cd codedriver
+```
+
+2. Install the required dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Set your Anthropic API key as an environment variable:
+
+```bash
+export ANTHROPIC_API_KEY=your_api_key
+```
 
 ## Usage
 
-1. Install the required dependencies: `pip install -r requirements.txt`
-2. Set up your Anthropic API key as an environment variable: `export ANTHROPIC_API_KEY=your_api_key`
-3. Run the CLI:
-   - For project analysis: `python -m codedriver info`
-   - For code modifications: `python -m codedriver change "description of the changes needed"`
+### Code Modification
 
-## Development
+To request code modifications, use the `change` command:
 
-To contribute to the project, follow these steps:
+```bash
+codedriver change "Description of the changes you need"
+```
 
-1. Clone the repository: `git clone https://github.com/your/repo.git`
-2. Install development dependencies: `pip install -r requirements-dev.txt`
-3. Run tests: `invoke test`
-4. Build the package: `python setup.py sdist bdist_wheel`
+This will display the proposed changes as a unified diff. You can then choose to apply the changes or not.
+
+### Code Analysis
+
+To get an analysis of your codebase, use the `info` command:
+
+```bash
+codedriver info
+```
+
+This will provide a concise summary of the main purpose, key features, and main components of your application.
+
+You can also ask a specific question about your codebase:
+
+```bash
+codedriver info "What is the purpose of the XYZ component?"
+```
+
+## Contributing
+
+Contributions are welcome! Please open an issue or submit a pull request.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
