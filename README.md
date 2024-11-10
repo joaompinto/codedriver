@@ -1,13 +1,14 @@
 # CodeDriver
 
-CodeDriver is an AI-powered tool that helps you modify and analyze code files using natural language prompts. It leverages the Anthropic Claude AI model to understand your requests and generate the necessary code changes or provide insightful analysis.
+CodeDriver is an AI-powered tool that helps you modify and maintain your codebase using natural language prompts. With CodeDriver, you can easily make changes to your code without manually editing files, saving you time and effort.
 
 ## Features
 
-- **Code Modification**: Provide a natural language description of the changes you need, and CodeDriver will generate a unified diff with the proposed modifications.
-- **Code Analysis**: Get a concise analysis of your codebase, including its main purpose, key features, and main components.
-- **Interactive Preview**: Before applying any changes, you can preview the proposed modifications and decide whether to apply them or not.
-- **Syntax Highlighting**: Diffs and new files are displayed with syntax highlighting for better readability.
+- **Natural Language Prompts**: Describe the changes you want to make to your code using plain English.
+- **Code Analysis**: Get a high-level analysis of your codebase, including its purpose, key features, and main components.
+- **Automatic Code Modification**: CodeDriver generates the necessary code changes based on your prompt and applies them to your files.
+- **Diff Preview**: Before applying changes, you can preview the proposed modifications as a unified diff.
+- **Selective File Processing**: You can choose to process specific files or scan the entire project directory.
 
 ## Installation
 
@@ -32,31 +33,41 @@ export ANTHROPIC_API_KEY=your_api_key
 
 ## Usage
 
-### Code Modification
-
-To request code modifications, use the `change` command:
-
-```bash
-codedriver change "Description of the changes you need"
-```
-
-This will display the proposed changes as a unified diff. You can then choose to apply the changes or not.
-
 ### Code Analysis
 
-To get an analysis of your codebase, use the `info` command:
+To get a high-level analysis of your codebase, run:
 
 ```bash
-codedriver info
+python -m codedriver info
 ```
 
-This will provide a concise summary of the main purpose, key features, and main components of your application.
-
-You can also ask a specific question about your codebase:
+You can also ask a specific question about your code:
 
 ```bash
-codedriver info "What is the purpose of the XYZ component?"
+python -m codedriver info "What is the purpose of the authentication module?"
 ```
+
+### Code Modification
+
+To modify your code based on a natural language prompt, run:
+
+```bash
+python -m codedriver change "Add a new feature to handle user registration"
+```
+
+By default, CodeDriver will scan the current directory for code files. You can specify a different directory using the `--path` option:
+
+```bash
+python -m codedriver change "Refactor the database layer" --path=/path/to/project
+```
+
+You can also process specific files by providing a space-separated list with the `--files` option:
+
+```bash
+python -m codedriver change "Fix the bug in the login function" --files="app.py utils.py"
+```
+
+Before applying the changes, CodeDriver will show you a preview of the proposed modifications. You can then choose to apply the changes or cancel the operation.
 
 ## Contributing
 

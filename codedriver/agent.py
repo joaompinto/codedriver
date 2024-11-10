@@ -37,12 +37,15 @@ class Agent:
                 for fname, content in current_files.items():
                     file_content += f"file: {fname}\n{content}\n---\n"
 
-            user_prompt = (
-                f"{file_content}\n"
-                f"Request: {prompt}\n\n"
-                "Provide the complete modified or new files following the specified format."
-            )
+            user_prompt = f"""
+Current code files to modify:
 
+{file_content}
+
+Request: {prompt}
+
+Please provide the complete modified or new files following this format.
+"""
             response = self._get_ai_response(prompt, user_prompt, system_prompt)
 
             # Parse and validate response
@@ -75,8 +78,9 @@ class Agent:
                 file_content += f"file: {fname}\n{content}\n---\n"
 
             if question:
-                user_prompt = f"Please analyze these code files and answer this specific question: {question}"
-                "\n\n{file_content}"
+                user_prompt = f"""Please analyze these code files and answer this specific question: {question}
+
+{file_content}"""
             else:
                 base_prompt = """Please analyze these code files and provide a concise summary of:
 1. The main purpose of the application
@@ -94,10 +98,9 @@ class Agent:
             raise
 
     def _process_file_content(
-        self, lines: list, start_idx: int
-    ) -> tuple[str, list[str], int]:
+        self, lines: list[str], start_idx: int
+    ) -> tuple[None, list[str], int]:
         """Process file content from a specific line index."""
-        current_file = None
         current_content = []
         idx = start_idx
 
@@ -114,7 +117,7 @@ class Agent:
             current_content.append(line)
             idx += 1
 
-        return current_file, current_content, idx
+        return None, current_content, idx
 
     def _save_file_content(self, files: dict, current_file: str, content: list) -> None:
         """Save file content to files dictionary if valid."""
