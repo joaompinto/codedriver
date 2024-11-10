@@ -1,0 +1,20 @@
+{
+  "template": "https://github.com/joaompinto/PythonCookiecutter.git",
+  "commit": "ee57c1e44820f5205ff928c6e2891de1a51b54e6",
+  "checkout": null,
+  "context": {
+    "cookiecutter": {
+      "directory_name": "codedriver",
+      "package_name": "codedriver",
+      "project_short_description": "Drive your code from the CLI using AI",
+      "author_name": "João Pinto",
+      "author_email": "lamego.pinto@gmail.com",
+      "repository_url": "https://github.com/joaompinto/codedriver",
+      "_copy_without_render": [
+        "*.yaml"
+      ],
+      "_template": "https://github.com/joaompinto/PythonCookiecutter.git"
+    }
+  },
+  "directory": null
+}
