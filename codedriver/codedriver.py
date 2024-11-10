@@ -96,31 +96,64 @@ def apply_changes(content: str):
     import subprocess
     import tempfile
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".patch") as tmp:
-        tmp.write(content)
-        tmp.flush()
+    # Clean up the patch content
+    lines = content.strip().split("\n")
+    cleaned_lines = []
+    for line in lines:
+        if line.startswith(("---", "+++")) and not line.startswith(
+            ("--- ./", "+++ ./")
+        ):
+            # Add ./ to relative paths if missing
+            parts = line.split(" ")
+            if len(parts) > 1:
+                cleaned_lines.append(f"{parts[0]} ./{parts[1]}")
+            continue
+        cleaned_lines.append(line)
 
-        try:
+    cleaned_content = "\n".join(cleaned_lines)
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as tmp:
+        tmp.write(cleaned_content)
+        tmp.flush()
+        tmp_path = tmp.name
+
+    try:
+        # First try with -p0
+        result = subprocess.run(
+            ["patch", "-p0", "--forward", "--verbose"],
+            stdin=open(tmp_path, "r"),
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            # If p0 fails, try with -p1
             result = subprocess.run(
-                ["patch", "-p1", "--forward"],
-                stdin=open(tmp.name),
-                cwd=os.getcwd(),  # Explicitly set working directory
+                ["patch", "-p1", "--forward", "--verbose"],
+                stdin=open(tmp_path, "r"),
+                cwd=os.getcwd(),
                 capture_output=True,
                 text=True,
-                check=False,  # Don't raise exception, handle output manually
+                check=False,
             )
 
-            if result.returncode == 0:
-                if result.stderr:
-                    print("Patch output:", result.stderr)
-                return True
-            else:
-                print("Patch failed:", result.stderr)
-                return False
+        # Print debug information
+        print("\nPatch attempt output:")
+        if result.stdout:
+            print("stdout:", result.stdout)
+        if result.stderr:
+            print("stderr:", result.stderr)
 
-        except Exception as e:
-            print(f"Failed to apply changes: {str(e)}")
-            return False
+        os.unlink(tmp_path)
+        return result.returncode == 0
+
+    except Exception as e:
+        print(f"Failed to apply changes: {str(e)}")
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        return False
 
 
 def change(text: str):  # Renamed from changes to change
@@ -145,8 +178,20 @@ def change(text: str):  # Renamed from changes to change
 The requested changes are:
 {}
 
-Format your response as as an unified diff file with file content changes.
-Do not response any other text, just the diff.
+Format your response as a unified diff file with these requirements:
+1. Start each file diff with "--- filename" and "+++ filename"
+2. Use relative paths from the current directory
+3. Include @@ line numbers @@
+4. Only output the diff content, no other text
+
+Example format:
+--- ./path/to/file.py
++++ ./path/to/file.py
+@@ -1,3 +1,3 @@
+ line
+-old line
++new line
+ line
 """.format(
         "\n---\n".join(files_content), text
     )
