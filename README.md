@@ -1,13 +1,14 @@
 # CodeDriver
 
-CodeDriver is an AI-powered tool that helps you modify and analyze code files using natural language prompts. It leverages the Anthropic Claude AI model to understand your requests and generate the necessary code changes or provide insightful analysis.
+CodeDriver is a command-line tool that leverages the Claude AI language model to assist with code modifications and analysis. It provides a convenient interface for interacting with Claude, allowing you to request code changes, preview the proposed modifications, and selectively apply them to your project.
 
 ## Features
 
-- **Code Modification**: Provide a natural language description of the changes you need, and CodeDriver will generate a unified diff with the proposed modifications.
-- **Code Analysis**: Get a concise analysis of your codebase, including its main purpose, key features, and main components.
-- **Interactive Preview**: Before applying any changes, you can preview the proposed modifications and decide whether to apply them or not.
-- **Syntax Highlighting**: Diffs and new files are displayed with syntax highlighting for better readability.
+- **Project Analysis**: Get a concise summary of your project's purpose, key features, and main components.
+- **Code Modification**: Request code changes by describing the desired modifications in natural language.
+- **Change Preview**: View a detailed overview of the proposed changes, including file-by-file diffs.
+- **Selective Application**: Apply changes to specific files or the entire project with a simple command.
+- **Safety Features**: Automatic backups, preview directories for testing, and patch-based change application ensure a safe modification process.
 
 ## Installation
 
@@ -24,43 +25,35 @@ cd codedriver
 pip install -r requirements.txt
 ```
 
-3. Set your Anthropic API key as an environment variable:
+3. Set up your Anthropic API key as an environment variable:
 
 ```bash
-export ANTHROPIC_API_KEY=your_api_key
+export ANTHROPIC_API_KEY=your_api_key_here
 ```
 
 ## Usage
 
-### Code Modification
+1. Navigate to your project directory.
 
-To request code modifications, use the `change` command:
+2. Run the `codedriver` command with the desired action:
 
-```bash
-codedriver change "Description of the changes you need"
-```
+   - **Project Analysis**:
 
-This will display the proposed changes as a unified diff. You can then choose to apply the changes or not.
+     ```bash
+     codedriver info
+     ```
 
-### Code Analysis
+   - **Code Modification**:
 
-To get an analysis of your codebase, use the `info` command:
+     ```bash
+     codedriver change "Description of the desired code changes"
+     ```
 
-```bash
-codedriver info
-```
-
-This will provide a concise summary of the main purpose, key features, and main components of your application.
-
-You can also ask a specific question about your codebase:
-
-```bash
-codedriver info "What is the purpose of the XYZ component?"
-```
+3. Follow the prompts and instructions in the terminal to preview and apply the changes.
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request.
+Contributions are welcome! If you find any issues or have suggestions for improvements, please open an issue or submit a pull request.
 
 ## License
 
