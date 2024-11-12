@@ -7,11 +7,19 @@ from rich.console import Console
 from rich.syntax import Syntax
 import difflib
 from pathlib import Path
+from .scan import _load_gitignore, _is_ignored
+import re
 
 console = Console()
 
 def _copy(src: str, dst: str, is_dir: bool = False, silent: bool = False) -> None:
     """Helper function to perform copy operations"""
+    # Load gitignore patterns
+    ignore_patterns = _load_gitignore()
+    
+    if _is_ignored(src, ignore_patterns):
+        return
+        
     if not silent:
         rel_src = os.path.relpath(src)
         rel_dst = os.path.relpath(dst)
@@ -22,7 +30,11 @@ def _copy(src: str, dst: str, is_dir: bool = False, silent: bool = False) -> Non
             console.print(f"[green]Creating[/green] {rel_dst}")
         
     if is_dir:
-        shutil.copytree(src, dst, dirs_exist_ok=True, ignore=_ignore_patterns)
+        def _ignore_func(path, names):
+            return [n for n in names if n == '.git' or 
+                   _is_ignored(os.path.join(path, n), ignore_patterns)]
+                   
+        shutil.copytree(src, dst, dirs_exist_ok=True, ignore=_ignore_func)
     else:
         shutil.copy2(src, dst)
 
@@ -32,8 +44,7 @@ def _ignore_patterns(path, names):
 
 def _create_backup() -> str:
     """Create a backup of the working directory"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = os.path.join(tempfile.gettempdir(), f"codedriver_backup_{timestamp}")
+    backup_dir = tempfile.mkdtemp(prefix="codedriver_backup_")
     
     try:
         console.print("[blue]Creating backup...[/blue]")
@@ -45,50 +56,60 @@ def _create_backup() -> str:
         return ""
 
 def _process_changes(content: str, preview_dir: str) -> tuple[list, list]:
-    """Process changes using full file content replacement"""
+    """Process changes using delimiter-based format"""
     test_cmds = []
     modified_files = []
-    current_file = None
-    current_content = []
+    
+    try:
+        # Extract file changes using regex
+        file_pattern = (
+            r'@==CODEDRIVER==.*?==@\s*FILE\s+(MODIFY|CREATE|DELETE)\s+([^\s]+)\s+([a-f0-9]{8})\s*\n(.*?)\n\s*@==CODEDRIVER==.*?==@\s*FILE'
+        )
+        
+        # Find all file changes in the content
+        for match in re.finditer(file_pattern, content, re.DOTALL):
+            operation = match.group(1).lower()
+            filepath = match.group(2).strip()
+            provided_hash = match.group(3)
+            file_content = match.group(4).strip()
+            
+            # Process file content for test commands
+            for line in file_content.split('\n'):
+                if line.startswith('"""TEST CMD:'):
+                    test_cmds.append(line.split(":", 1)[1].strip().strip('"""'))
+            
+            # Skip if hash verification fails
+            if operation != "delete":
+                content_hash = hashlib.md5(file_content.encode('utf-8')).hexdigest()[:8]
+                if content_hash != provided_hash:
+                    console.print(f"[red]Warning: Content verification failed for {filepath}[/red]")
+                    continue
 
-    for line in content.strip().split("\n"):
-        if line.startswith("### [") and line.endswith("]"):
-            if current_file:
+            # Process the change
+            if operation in ["modify", "create"]:
                 # Create parent directories if needed
-                filepath = os.path.join(preview_dir, current_file)
-                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                full_path = os.path.join(preview_dir, filepath)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
                 
-                # Write full file content
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write("\n".join(current_content))
-                modified_files.append(current_file)
+                # Write content to preview file
+                with open(full_path, "w", encoding="utf-8") as f:
+                    f.write(file_content)
                 
-                # Check for test commands
-                for content_line in current_content:
-                    if content_line.startswith('"""TEST CMD:'):
-                        test_cmds.append(content_line.split(":", 1)[1].strip().strip('"""'))
+                modified_files.append(filepath)
 
-            current_file = line[5:-1]
-            current_content = []
-        else:
-            current_content.append(line)
+            elif operation == "delete" and os.path.exists(filepath):
+                modified_files.append(filepath)
 
-    # Handle last file
-    if current_file:
-        filepath = os.path.join(preview_dir, current_file)
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(current_content))
-        modified_files.append(current_file)
-        for content_line in current_content:
-            if content_line.startswith('"""TEST CMD:'):
-                test_cmds.append(content_line.split(":", 1)[1].strip().strip('"""'))
-
+    except Exception as e:
+        console.print(f"[red]Error processing changes:[/red] {str(e)}")
+        
     return test_cmds, modified_files
 
 def _setup_preview_dir() -> str:
     """Setup and return the preview directory path"""
-    preview_dir = os.path.join(tempfile.gettempdir(), "codedriver_preview")
+    from .codedriver import get_preview_directory
+    
+    preview_dir = get_preview_directory()
     if os.path.exists(preview_dir):
         shutil.rmtree(preview_dir)
     os.makedirs(preview_dir)
@@ -103,53 +124,8 @@ def _setup_preview_dir() -> str:
             
     return preview_dir
 
-def _generate_patch_file(preview_dir: str, working_dir: str, modified_files: list) -> str:
-    """Generate a unified patch file using the diff command"""
-    patch_path = os.path.join(tempfile.gettempdir(), "changes.patch")
-    
-    try:
-        with open(patch_path, 'w', encoding='utf-8') as patch_file:
-            for file in modified_files:
-                preview_path = os.path.join(preview_dir, file)
-                working_path = os.path.join(working_dir, file)
-                
-                # If working file doesn't exist, create empty file for diff
-                if not os.path.exists(working_path):
-                    Path(working_path).parent.mkdir(parents=True, exist_ok=True)
-                    Path(working_path).touch()
-                
-                # Run diff command with unified format
-                result = subprocess.run(
-                    ['diff', '-u', working_path, preview_path],
-                    capture_output=True,
-                    text=True
-                )
-                
-                # diff returns 1 if files are different, which is what we want
-                if result.returncode == 1:
-                    patch_file.write(result.stdout)
-                    if not result.stdout.endswith('\n'):
-                        patch_file.write('\n')
-                elif result.returncode > 1:
-                    # Any return code > 1 indicates an error
-                    console.print(f"[red]Error generating diff for {file}:[/red] {result.stderr}")
-                    return ''
-                    
-        # Return patch file path only if it contains changes
-        if os.path.getsize(patch_path) > 0:
-            return patch_path
-            
-        os.unlink(patch_path)
-        return ''
-        
-    except Exception as e:
-        console.print(f"[red]Error generating patch file:[/red] {str(e)}")
-        if os.path.exists(patch_path):
-            os.unlink(patch_path)
-        return ''
-
 def apply_changes_to_working(preview_dir: str, modified_files: list, backup_first: bool = True) -> bool:
-    """Apply changes from preview directory to working directory using patch"""
+    """Apply changes from preview directory to working directory by fully updating the modified files"""
     try:
         if backup_first:
             backup_dir = _create_backup()
@@ -166,33 +142,16 @@ def apply_changes_to_working(preview_dir: str, modified_files: list, backup_firs
             console.print("[yellow]No files to modify[/yellow]")
             return True
             
-        # Generate patch file
-        patch_file = _generate_patch_file(preview_dir, ".", modified_files)
-        if not patch_file:
-            console.print("[yellow]No changes to apply[/yellow]")
-            return True
+        for file in modified_files:
+            preview_path = os.path.join(preview_dir, file)
+            working_path = os.path.join(".", file)
             
-        # Apply patch with -p0 to use exact paths
-        console.print(f"\n[dim]Running: patch -p0 < {patch_file}[/dim]")
-        result = subprocess.run(
-            ['patch', '-p0', '--verbose'],
-            input=open(patch_file, 'r').read(),
-            shell=True,
-            cwd=".",
-            capture_output=True,
-            text=True
-        )
-        
-        try:
-            os.unlink(patch_file)  # Clean up patch file
-        except:
-            pass
+            # Create parent directories if needed
+            os.makedirs(os.path.dirname(working_path), exist_ok=True)
             
-        if result.stdout:
-            console.print("[dim]Patch output:[/dim]\n" + result.stdout)
-        if result.stderr and result.returncode != 0:
-            console.print("[red]Patch errors:[/red]\n" + result.stderr)
-            return False
+            # Copy file from preview directory to working directory
+            shutil.copy2(preview_path, working_path)
+            console.print(f"[green]Updated:[/green] {working_path}")
             
         console.print("[green]✓ Changes applied successfully[/green]")
         return True
@@ -206,7 +165,10 @@ def apply_changes_to_preview(content: str) -> tuple[str, list, list, bool]:
     try:
         preview_dir = _setup_preview_dir()
         test_cmds, modified_files = _process_changes(content, preview_dir)
-        
+
+        if not modified_files:
+            console.print("[yellow]No files to modify[/yellow]")
+            return preview_dir, test_cmds, modified_files, True
         console.print(f"\n[blue]Changes applied to preview directory:[/blue] {preview_dir}")
 
         # Run collected test commands
@@ -246,50 +208,43 @@ def show_diff(content: str) -> None:
     syntax = Syntax(content.strip(), "diff", theme="monokai", line_numbers=True)
     console.print(syntax)
 
-def show_directory_diff(original_dir: str, modified_dir: str) -> None:
-    """Show diff between two directories using generated patch file"""
+def show_file_diff(original_file: str, modified_file: str) -> bool:
+    """Show diff between two files using diff command. Returns True if differences found."""
     from rich.text import Text
     
-    # Get list of modified files
-    modified_files = []
-    for file in os.listdir(modified_dir):
-        if os.path.isfile(os.path.join(modified_dir, file)):
-            modified_files.append(file)
+    # Print the diff command
+    console.print(f"Running command: diff -u {original_file} {modified_file}")
     
-    # Generate patch file
-    patch_file = _generate_patch_file(modified_dir, original_dir, modified_files)
+    # Run diff command with unified format
+    result = subprocess.run(
+        ['diff', '-u', original_file, modified_file],
+        capture_output=True,
+        text=True
+    )
     
-    if not patch_file:
-        console.print("[yellow]No differences found[/yellow]")
-        return
+    if result.returncode == 1:  # Files are different
+        patch_content = result.stdout
         
-    try:
-        # Read and display patch content
-        with open(patch_file, 'r', encoding='utf-8') as f:
-            patch_content = f.read()
-            
         # Build rich text with proper coloring
-        result = Text()
+        result_text = Text()
         for line in patch_content.split('\n'):
             if line.startswith('+++'):
-                result.append(line + '\n', 'blue')
+                result_text.append(line + '\n', 'blue')
             elif line.startswith('---'):
-                result.append(line + '\n', 'blue')
+                result_text.append(line + '\n', 'blue')
             elif line.startswith('+'):
-                result.append(line + '\n', 'green')
+                result_text.append(line + '\n', 'green')
             elif line.startswith('-'):
-                result.append(line + '\n', 'red')
+                result_text.append(line + '\n', 'red')
             elif line.startswith('@@'):
-                result.append(line + '\n', 'cyan')
+                result_text.append(line + '\n', 'cyan')
             else:
-                result.append(line + '\n')
+                result_text.append(line + '\n')
                 
-        console.print(result)
-        
-    except Exception as e:
-        console.print(f"[red]Error showing diff: {str(e)}[/red]")
-    finally:
-        try:
-            os.unlink(patch_file)  # Clean up patch file
-        except:
-            pass
+        console.print(result_text)
+        return True
+    elif result.returncode > 1:  # Error occurred
+        console.print(f"[red]Error showing diff for {original_file}: {result.stderr}[/red]")
+    
+    console.print("[yellow]No differences found[/yellow]")
+    return False
